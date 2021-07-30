@@ -1,0 +1,126 @@
+import mysql.connector
+import pandas as pd
+
+assetdb = mysql.connector.connect(
+    host = "localhost",
+    user = "root",
+    password = '****password****',
+    database = 'test'
+)
+
+mycursor = assetdb.cursor()
+action = input("Which action do you want to do? "
+               "MODIFY asset "
+               "OR "
+               "VIEW assets assigned: "
+"").lower()
+
+if action == 'view':
+    # mycursor.execute('Select users.User_name, users.user_email, users.user_id, assets.Asset_ID, assets.asset_name, Assets.Asset_Value, concat(assets.asset_ID, USERS.user_ID, Assets_assigned.asset_assigned_ID) as AssetUser_ID FROM Users INNER JOIN assets_assigned ON assets_assigned.user_id=users.user_id INNER Join assets_assigned_line ON assets_assigned.asset_assigned_id = assets_assigned_line.Asset_assigned_ID INNER JOIN asset_inventory on assets_assigned_line.asset_inventory_id = asset_inventory.Asset_Inventory_ID INNER JOIN Assets on asset_inventory.Asset_ID = assets.asset_id WHERE assets_assigned_line.assign_type_id = 1 GROUP BY asset_inventory.Asset_Inventory_ID ORDER BY users.user_ID;')
+    # assets_assigned = mycursor.fetchall()
+
+    assets_assigned = pd.read_sql_query('Select users.User_name, users.user_email, users.user_id, assets.Asset_ID, assets.asset_name, Assets.Asset_Value, concat(assets.asset_ID, USERS.user_ID, Assets_assigned.asset_assigned_ID) as AssetUser_ID FROM Users INNER JOIN assets_assigned ON assets_assigned.user_id=users.user_id INNER Join assets_assigned_line ON assets_assigned.asset_assigned_id = assets_assigned_line.Asset_assigned_ID INNER JOIN asset_inventory on assets_assigned_line.asset_inventory_id = asset_inventory.Asset_Inventory_ID INNER JOIN Assets on asset_inventory.Asset_ID = assets.asset_id WHERE assets_assigned_line.assign_type_id = 1 GROUP BY asset_inventory.Asset_Inventory_ID ORDER BY users.user_ID;', assetdb)
+    pd.set_option('display.max_columns', None)
+    print(assets_assigned)
+
+
+if action == "modify":
+    user = input("Select a user: ").lower()
+    asset = input("Select an asset: " ).lower()
+    unit = input("Choose which unit: ").lower()
+    action = input("Do you want to ASSIGN or RETURN this asset? ").lower()
+
+####Assign an asset
+
+if action == 'assign':
+    mycursor.execute("SELECT users.user_id FROM users WHERE user_name = '{}'".format(user))
+    myresult_user = mycursor.fetchone()
+
+
+    sql_asset_assigned = "INSERT INTO assets_assigned (user_id) VALUES (%s)"
+    match_user_id = myresult_user
+    val_user = match_user_id
+
+    mycursor.execute(sql_asset_assigned, val_user)
+    assetdb.commit()
+
+
+    mycursor.execute("SELECT asset_inventory_id FROM asset_inventory WHERE asset_id = (SELECT asset_id FROM assets WHERE asset_name = '{}') AND asset_unit = '{}'".format(asset,unit))  ##get inventory number
+    myresult_asset = mycursor.fetchone()
+
+    mycursor.execute("SELECT assets_assigned.asset_assigned_id FROM assets_assigned WHERE asset_assigned_id = (SELECT MAX(asset_assigned_id) FROM assets_assigned)")
+    myresult_asset_assigned = mycursor.fetchone()
+
+    mycursor.execute("SELECT assign_type.assign_type_id FROM assign_type WHERE assign_type = '{}' ".format(action))
+    myresult_action = mycursor.fetchone()
+
+    ####variables come out as tuples -- indexing the tuple value into a string
+
+    sql_asset_assigned_line = """INSERT INTO assets_assigned_line (asset_assigned_id, asset_inventory_id, assign_type_id) VALUES (%s, %s, %s)"""
+    match_asset_id = myresult_asset[0]
+    match_asset_assigned_id = myresult_asset_assigned[0]
+    match_action = myresult_action[0]
+    val_asset_assigned = (match_asset_assigned_id, match_asset_id, match_action)
+
+    mycursor.execute(sql_asset_assigned_line, val_asset_assigned)
+
+    assetdb.commit()
+
+    sql_assignment = "INSERT INTO assignment (user_id, asset_inventory_id, asset_assigned_line_ID, asset_returned_line_id) VALUES (%s, %s, %s,%s)"
+    match_user_id = myresult_user[0]
+    val_assignment = (match_user_id, match_asset_id, match_asset_assigned_id, '0')
+
+    mycursor.execute(sql_assignment, val_assignment)
+    assetdb.commit()
+
+    sql_update_inventory = "UPDATE asset_inventory SET is_assigned = true WHERE Asset_inventory_ID = (SELECT asset_inventory_id FROM assets_assigned_line WHERE Asset_Assigned_Line_ID = (SELECT MAX(asset_assigned_line_id) from assets_assigned_line))"
+    mycursor.execute(sql_update_inventory)
+    assetdb.commit()
+    mycursor.close()
+
+    print('You gave', user,':', asset, '#', unit)
+
+## Returning an asset Inserts and code
+
+if action == 'return':
+    mycursor.execute("SELECT users.user_id FROM users WHERE user_name = '{}'".format(user)) #get user_id
+    myresult_user = mycursor.fetchone()
+
+    sql_asset_returned = "INSERT INTO assets_assigned (user_id) VALUES (%s)"
+    match_user_id = myresult_user
+    val_user = match_user_id
+
+    mycursor.execute(sql_asset_returned, val_user)
+    assetdb.commit()
+
+    mycursor.execute("SELECT asset_inventory_id FROM asset_inventory WHERE asset_id = (SELECT asset_id FROM assets WHERE asset_name = '{}') AND asset_unit = '{}'".format(asset, unit))  ##get inventory number
+    myresult_asset = mycursor.fetchone()
+
+    mycursor.execute("SELECT assets_assigned.asset_assigned_id FROM assets_assigned WHERE asset_assigned_id = (SELECT MAX(asset_assigned_id) FROM assets_assigned)")
+    myresult_asset_assigned = mycursor.fetchone()
+
+    mycursor.execute("SELECT assign_type.assign_type_id FROM assign_type WHERE assign_type = '{}' ".format(action))
+    myresult_action = mycursor.fetchone()
+
+    sql_asset_returned_line = """INSERT INTO assets_assigned_line (asset_assigned_id, asset_inventory_id, assign_type_id) VALUES (%s, %s, %s)"""
+    match_asset_id = myresult_asset[0]
+    match_asset_assigned = myresult_asset_assigned[0]
+    match_action = myresult_action[0]
+    val_asset_returned = (match_asset_assigned, match_asset_id, match_action)
+
+    mycursor.execute(sql_asset_returned_line, val_asset_returned)
+    assetdb.commit()
+
+    sql_assignment_select =  "SELECT assignment_ID FROM assignment WHERE user_ID = '{}' AND asset_inventory_id = '{}' AND asset_assigned_line_ID = (SELECT MAX(asset_assigned_line_ID) FROM assignment WHERE asset_inventory_ID = '{}')".format(myresult_user[0], myresult_asset[0], myresult_asset[0])
+    myresult_assignment = mycursor.fetchone()
+
+
+    sql_assignment = "UPDATE assignment SET asset_assigned_line_ID = (SELECT MAX(asset_assigned_line_ID) FROM assets assigned_line);"
+    mycursor.execute(sql_assignment)
+
+    sql_update_inventory = "UPDATE asset_inventory SET is_assigned = false WHERE Asset_inventory_ID = (SELECT asset_inventory_id FROM assets_assigned_line WHERE Asset_Assigned_Line_ID = (SELECT MAX(asset_assigned_line_id) from assets_assigned_line))"
+    mycursor.execute(sql_update_inventory)
+    assetdb.commit()
+    mycursor.close()
+
+    print('You took a(n)',asset,'from',user)
